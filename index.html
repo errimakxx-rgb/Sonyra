@@ -182,13 +182,21 @@ const mc=new Map();let lastErr='';
 function jsonp(u){return new Promise((ok,no)=>{const n='cb'+Math.random().toString(36).slice(2),s=document.createElement('script'),t=setTimeout(()=>{delete window[n];s.remove();no('timeout')},10000);
 window[n]=d=>{clearTimeout(t);delete window[n];s.remove();ok(d)};s.onerror=()=>{clearTimeout(t);delete window[n];s.remove();no('bloccato')};s.src=u+'&callback='+n;document.head.appendChild(s)})}
 async function it(p){const c=mc.get(p);if(c&&Date.now()-c.t<3e5)return c.d;
-try{const d=(await jsonp('https://itunes.apple.com'+p+(p.includes('?')?'&':'?')+'country=IT')).results||[];mc.set(p,{t:Date.now(),d});return d}catch(e){lastErr='Catalogo: '+e;throw new Error(lastErr)}}
+try{const u='https://itunes.apple.com'+p+(p.includes('?')?'&':'?')+'country=IT';let r;try{r=await(await fetch(u)).json()}catch(x){r=await jsonp(u)}const d=r.results||[];mc.set(p,{t:Date.now(),d});return d}catch(e){lastErr='Catalogo: '+e;throw new Error(lastErr)}}
 async function api(p){try{const r=await fetch(API+p+(p.includes('?')?'&':'?')+APP);if(!r.ok)throw 0;return(await r.json()).data}catch(e){return[]}}
 const big=u=>(u||'').replace('100x100','400x400');
 const nt=x=>{if(!x||!x.trackId||!x.previewUrl)return null;const t={id:'i'+x.trackId,t:x.trackName,a:x.artistName,aid:x.artistId,img:big(x.artworkUrl100),hue:x.trackId%360,url:x.previewUrl};known.set(t.id,t);return t};
 const nts=a=>(a||[]).filter(x=>x.kind==='song').map(nt).filter(Boolean);
 const alb=x=>({id:x.collectionId,n:x.collectionName,img:big(x.artworkUrl100),by:x.artistName||'',y:(x.releaseDate||'').slice(0,4),hue:x.collectionId%360});
 const na=x=>({id:x.artistId,n:x.artistName,g:x.primaryGenreName||'',hue:x.artistId%360});
+const auds=d=>(d||[]).filter(x=>x.is_streamable!==false).map(x=>{const u=API+'/tracks/'+x.id+'/stream?'+APP,t={id:'a'+x.id,t:x.title,a:(x.user||{}).name||'Artista',img:((x.artwork||{})['480x480'])||'',hue:hash(x.id),url:u,full:u};known.set(t.id,t);return t});
+const dzt=x=>{if(!x||!x.preview)return null;const t={id:'z'+x.id,t:x.title,a:(x.artist||{}).name||'Artista',img:(x.album||{}).cover_big||'',hue:x.id%360,url:x.preview};known.set(t.id,t);return t};
+const diag=[];
+async function songs(term,n){diag.length=0;
+try{return await it('/search?media=music&entity=song&limit='+n+'&term='+encodeURIComponent(term)).then(nts)}catch(e){diag.push('iTunes: '+String(e.message||e).replace('Catalogo: ',''))}
+try{const d=await jsonp('https://api.deezer.com/search?output=jsonp&limit='+n+'&q='+encodeURIComponent(term));const r=(d.data||[]).map(dzt).filter(Boolean);if(r.length)return r;diag.push('Deezer: nessun risultato')}catch(e){diag.push('Deezer: '+(e.message||e))}
+const r=auds(await api('/tracks/search?limit='+n+'&query='+encodeURIComponent(term)));if(r.length)return r;
+diag.push('Audius: nessun risultato');lastErr=diag.join(' · ');throw new Error(lastErr)}
 const norm=s=>String(s||'').toLowerCase().replace(/\(.*?\)|\[.*?\]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
 async function upgrade(t){if(t.full||t.nf)return;
 const d=await api('/tracks/search?limit=5&query='+encodeURIComponent(t.a+' '+t.t)),n1=norm(t.t),n2=norm(t.a);
@@ -209,11 +217,15 @@ let view='home',lib='songs',query='',ctx=[],q=[],idx=-1,sh=false,rp=0,home=null,
 const cur=()=>q[idx]||null,topD=()=>stack[stack.length-1];
 const POOL=[['Pop del momento','pop hits'],['Rock da ascoltare','rock classics'],['Musica italiana','musica italiana'],['Hip hop','hip hop'],['Indie','indie pop'],['Jazz di sera','jazz'],['Elettronica','electronic'],['Cantautori','cantautori italiani'],['Latin','latin pop'],['Pianoforte','piano classical'],['Soul e R&B','soul r&b'],['Anni ’90','90s hits'],['Reggae','reggae'],['Folk acustico','acoustic folk']];
 async function chart(){const r=await(await fetch('https://rss.applemarketingtools.com/api/v2/it/music/most-played/25/songs.json')).json();return nts(await it('/lookup?id='+r.feed.results.map(x=>x.id).join(',')))}
-const shelf=term=>()=>it('/search?media=music&entity=song&limit=16&term='+encodeURIComponent(term)).then(nts);
-async function loadHome(force){home=null;if(view==='home'&&!stack.length)render();
+const shelf=term=>()=>songs(term,16);
+async function loadHome(force){
+if(!force){try{const c=JSON.parse(localStorage.getItem('sonyra-home'));if(c&&Date.now()-c.t<216e5&&c.s&&c.s.length){c.s.forEach(x=>x.items.forEach(t=>known.set(t.id,t)));home=c.s;if(view==='home'&&!stack.length)render();return}}catch(e){}}
+home=null;if(view==='home'&&!stack.length)render();
 const r=rnd(force?Date.now():Math.floor(Date.now()/216e5)),pick=POOL.slice().sort(()=>r()-.5).slice(0,3),out=[];
 const jobs=[['In tendenza in Italia',chart]].concat(pick.map(p=>[p[0],shelf(p[1])]));
 for(const j of jobs){try{const items=await j[1]();if(items.length){out.push({title:j[0],items});home=out.slice();if(view==='home'&&!stack.length)render()}}catch(e){}}
+if(!out.length){try{const items=auds(await api('/tracks/trending?limit=18&time=week'));if(items.length)out.push({title:'In tendenza (artisti indipendenti)',items})}catch(e){}}
+if(out.length&&out.every(x=>x.items.every(t=>t.id[0]==='i')))try{localStorage.setItem('sonyra-home',JSON.stringify({t:Date.now(),s:out}))}catch(e){}
 home=out;if(view==='home'&&!stack.length)render()}
 
 /* Elementi grafici */
@@ -223,7 +235,7 @@ const row=(t,i)=>`<div class="row in${cur()&&cur().id===t.id?' on':''}" style="-
 const lrow=(at,c,t,s)=>`<div class="row in" ${at} role="button" tabindex="0">${c}<div class="meta"><div class="tt">${esc(t)}</div><div class="ar">${esc(s)}</div></div></div>`;
 const hd=()=>`<div class="top"><div class="logo"><svg width="26" height="26" viewBox="0 0 26 26" fill="var(--ac)" aria-hidden="true"><rect x="2" y="9" width="4" height="8" rx="2"/><rect x="8" y="3" width="4" height="20" rx="2"/><rect x="14" y="7" width="4" height="12" rx="2"/><rect x="20" y="11" width="4" height="4" rx="2"/></svg>sonyra</div></div>`;
 const emp=t=>`<p class="empty">${t}</p>`;
-const noNet=()=>`<p class="empty">Non riesco a collegarmi al catalogo musicale. Controlla la connessione e riprova.</p><p class="ar">${esc(lastErr)}</p>`;
+const noNet=()=>`<p class="empty">Non riesco a collegarmi al catalogo musicale. Controlla la connessione e riprova.</p><p class="ar">${esc(lastErr)}</p><p class="ar">Sonyra v6</p>`;
 const skel=n=>Array.from({length:n},()=>'<div class="row"><div class="cv sk" style="width:52px;flex:none"></div><div class="meta"><div class="sk" style="height:14px;width:60%;margin-bottom:8px"></div><div class="sk" style="height:12px;width:35%"></div></div></div>').join('');
 const cards=(arr,at,mk)=>`<div class="hs">${arr.map((x,i)=>`<button class="${at.c||'card'} in" style="--i:${Math.min(i,6)}" ${mk(x,i)}>${at.v(x)}<div class="tt">${esc(at.t(x))}</div><div class="ar">${esc(at.s(x))}</div></button>`).join('')}</div>`;
 const albCards=a=>cards(a,{v:cv,t:x=>x.n,s:x=>x.by+(x.y?' · '+x.y:'')},x=>`data-alb="${x.id}"`);
@@ -239,8 +251,8 @@ el.innerHTML=!r.t.length&&!r.u.length&&!r.p.length?emp(`Nessun risultato per “
 (r.t.length?'<h2 class="s">Brani</h2>'+r.t.map(row).join(''):'')}}
 function runSearch(){clearTimeout(tm);const s=query.trim();if(!s){tok++;results=null;return paintRes()}
 tm=setTimeout(async()=>{const k=++tok,e=encodeURIComponent(s);results='load';paintRes();
-try{const[t,u,p]=await Promise.all([it('/search?media=music&entity=song&limit=25&term='+e).then(nts),it('/search?media=music&entity=musicArtist&limit=8&term='+e).then(a=>a.filter(x=>x.artistId).map(na)).catch(()=>[]),it('/search?media=music&entity=album&limit=10&term='+e).then(a=>a.filter(x=>x.collectionId).map(alb)).catch(()=>[])]);
-if(k!==tok)return;results={t,u,p}}catch(x){if(k!==tok)return;results='err'}paintRes()},350)}
+try{const[t,u,p]=await Promise.all([songs(s,25),it('/search?media=music&entity=musicArtist&limit=8&term='+e).then(a=>a.filter(x=>x.artistId).map(na)).catch(()=>[]),it('/search?media=music&entity=album&limit=10&term='+e).then(a=>a.filter(x=>x.collectionId).map(alb)).catch(()=>[])]);
+if(k!==tok)return;results={t,u,p}}catch(x){if(k!==tok)return;try{const d=await api('/tracks/search?limit=25&query='+e);if(k!==tok)return;const t=auds(d);results=t.length?{t,u:[],p:[]}:'err'}catch(z){results='err'}}paintRes()},350)}
 
 function render(){
 document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.v===view));
